@@ -344,15 +344,23 @@ jobs:
           echo "本次发布包含："
           (cd dist && ls *.apk) | sed 's/^/  /'
           KEEP_LIST="$(cd dist && ls *.apk 2>/dev/null || true)"
-          for aid in $(gh release view "$TAG" -R "$REPO" --json assets --jq '.assets[] | select(.name | endswith(".apk")) | .id'); do
-            aname=$(gh api "repos/$REPO/releases/assets/$aid" --jq .name 2>/dev/null || echo "")
+          # 一次性导出 "id<TAB>name"，避免在 jq 内做字符串/数字比较（asset id 形如 RA_xxx 是字符串）
+          gh release view "$TAG" -R "$REPO" --json assets \
+            --jq '.assets[] | select(.name | endswith(".apk")) | "\(.id)\t\(.name)"' \
+            > /tmp/assets.tsv || true
+          while IFS=$'\t' read -r aid aname; do
+            [ -z "$aid" ] && continue
             [ -z "$aname" ] && continue
             if printf '%s\n' "$KEEP_LIST" | grep -qx "$aname"; then
               continue
             fi
-            echo "删除范围外资产：$aname"
-            gh api -X DELETE "repos/$REPO/releases/assets/$aid" >/dev/null 2>&1 || true
-          done
+            echo "删除范围外资产：$aname (id=$aid)"
+            if gh api -X DELETE "repos/$REPO/releases/assets/$aid" >/dev/null 2>&1; then
+              echo "  已删除 $aname"
+            else
+              echo "  删除失败 $aname"
+            fi
+          done < /tmp/assets.tsv
           echo "最终资产："
           gh release view "$TAG" -R "$REPO" --json assets --jq '.assets[].name'
 
