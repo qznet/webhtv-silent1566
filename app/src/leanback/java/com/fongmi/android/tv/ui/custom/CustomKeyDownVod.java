@@ -122,6 +122,10 @@ public class CustomKeyDownVod extends GestureDetector.SimpleOnGestureListener {
 
         void onShowControl();
 
+        void onKeyUp();
+
+        void onKeyDown();
+
         void onKeyCenter();
 
         void onSingleTap();
