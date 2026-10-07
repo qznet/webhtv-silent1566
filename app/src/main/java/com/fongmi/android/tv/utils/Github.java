@@ -2,13 +2,14 @@ package com.fongmi.android.tv.utils;
 
 public class Github {
 
-    private static final String GITHUB_LATEST = "https://github.com/Silent1566/webhtv/releases/latest/download";
-    private static final String GITHUB_RELEASE = "https://github.com/Silent1566/webhtv/releases/download";
+    private static final String GITHUB_LATEST = "https://github.com/qznet/webhtv-silent1566/releases/latest/download";
+    private static final String GITHUB_RELEASE = "https://github.com/qznet/webhtv-silent1566/releases/download";
     private static final String GITHUB_UPDATE_CHANNEL = GITHUB_RELEASE + "/update-channel";
-    private static final String CNB_MANIFEST = "https://cnb.cool/fish2035/webhtv-release/-/git/raw/main/apk";
-    private static final String GITHUB_API = "https://api.github.com/repos/Silent1566/webhtv/releases/tags";
-    private static final String GITHUB_RELEASES_API = "https://api.github.com/repos/Silent1566/webhtv/releases";
-    private static final String GITHUB_RELEASE_ASSETS_API = "https://api.github.com/repos/Silent1566/webhtv/releases/assets";
+    // 镜像源统一指向本项目的 update-channel，避免 app 内更新拿到上游/第三方的非本项目构建包
+    private static final String CNB_MANIFEST = GITHUB_UPDATE_CHANNEL;
+    private static final String GITHUB_API = "https://api.github.com/repos/qznet/webhtv-silent1566/releases/tags";
+    private static final String GITHUB_RELEASES_API = "https://api.github.com/repos/qznet/webhtv-silent1566/releases";
+    private static final String GITHUB_RELEASE_ASSETS_API = "https://api.github.com/repos/qznet/webhtv-silent1566/releases/assets";
 
     public static String getChannelAsset(String name) {
         return GITHUB_UPDATE_CHANNEL + "/" + name;
