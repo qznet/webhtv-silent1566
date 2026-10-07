@@ -118,6 +118,32 @@ jobs:
         if: steps.merge.outputs.changed == 'true'
         run: git push origin main
 
+      - name: Ensure fullscreen speed-key customization
+        id: guard
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        run: |
+          # 上游合并可能覆盖「全屏播放中短按上下键调速」定制，release 前检查并自动修复
+          BEFORE_GUARD=$(git rev-parse HEAD)
+          if bash scripts/ensure_fullscreen_speed_keys.sh; then
+            if [ -n "$(git status --porcelain)" ]; then
+              git config user.email "action@webhtv.local"
+              git config user.name "sync-bot"
+              git add -A app/src/leanback
+              git commit -m "fix(leanback): 重新应用全屏上下键调速定制（上游合并后自动修复）"
+              echo "Patched=true" >> "$GITHUB_OUTPUT"
+              echo "::notice title=全屏调速定制已重新应用::上游合并覆盖了调速逻辑，已自动修复"
+            else
+              echo "Patched=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "Patched=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=全屏调速定制需人工检查::自动修复失败，请检查 VideoActivity/CustomKeyDownVod"
+          fi
+
+      - name: Push guard fixes
+        if: steps.guard.outputs.Patched == 'true'
+        run: git push origin main
+
       - name: Set up JDK 21
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
         uses: actions/setup-java@v4
@@ -202,6 +228,44 @@ jobs:
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "Source: track=$TRACK target=$TARGET"
 
+      - name: Build release notes (期间更新内容)
+        id: notes
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        env:
+          TARGET: ${{ steps.merge.outputs.target }}
+          TRACK: ${{ inputs.track || 'auto' }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          PREV_TAG="$(gh release list -R "${{ github.repository }}" --limit 100 --json tagName \
+            --jq '[.[] | select(.tagName != env.TAG)] | sort_by(.tagName) | last | .tagName // ""' 2>/dev/null || echo '')"
+          echo "Previous release: ${PREV_TAG:-（无）}"
+          {
+            echo "## 本项目定制构建（qznet/webhtv-silent1566）"
+            echo
+            echo "- 跟随上游：\`Silent1566/webhtv\`（track=\`$TRACK\`，目标 \`$TARGET\`）"
+            echo "- 对比上一版本：${PREV_TAG:-无（首个版本）}"
+            echo
+            echo "### 本仓库定制"
+            echo "- 全屏播放中：短按上下键调节倍速（±0.1，范围 0.25–5.0），暂停时不生效"
+            echo "- 长按下键：唤出控制栏；长按上键：连续调速（上游原有行为）"
+            echo
+            echo "### 更新内容"
+            if [ -n "$PREV_TAG" ]; then
+              echo '```'
+              gh release view "$PREV_TAG" -R "${{ github.repository }}" --json body --jq .body 2>/dev/null \
+                | head -40 || echo "（无法读取上一版本说明）"
+              echo '```'
+            else
+              echo "- 首次同步上游 tag \`$TARGET\` 的构建。"
+            fi
+            echo
+            echo "### 说明"
+            echo "- 调试版（debug）免签名构建，可直接 sideload 安装。"
+            echo "- 本仓库为 GitHub Import 副本，非 fork；每周自动跟随上游最新发布版。"
+          } > release-notes.md
+          echo "tag_prev=$PREV_TAG" >> "$GITHUB_OUTPUT"
+          cat release-notes.md
+
       - name: Create GitHub Release
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
         env:
@@ -220,9 +284,48 @@ jobs:
               -R "$REPO" \
               --target main \
               --title "${{ steps.meta.outputs.tag }}" \
-              --notes "自动跟随上游 Silent1566/webhtv（track=${{ inputs.track || 'auto' }}，target=${{ steps.merge.outputs.target }}）构建的调试版，可直接 sideload。" \
+              --notes-file release-notes.md \
               $PRERELEASE_FLAG \
               dist/*.apk
+          fi
+
+      - name: Publish update-channel manifest (供 app 内检查更新)
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          # 生成与 app 内 Updater 约定一致的 manifest.json，并挂到 update-channel release，
+          # 使「关于 → 检查更新」能发现本项目构建并显示更新内容。
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+          CHANNEL_TAG="update-channel"
+          VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
+          VERSION_CODE="$(sed -n 's/^[[:space:]]*versionCode[[:space:]]*\([0-9][0-9]*\).*/\1/p' app/build.gradle | head -1)"
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          # leanback arm64 是 TV 主力包，作为默认 apk 目标
+          APK_BASE="app-leanback-arm64_v8a-debug"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+
+          for name in app-leanback-arm64_v8a app-leanback-armeabi_v7a app-mobile-arm64_v8a app-mobile-armeabi_v7a; do
+            apk="dist/${name}-debug.apk"
+            [ -f "$apk" ] || continue
+            size=$(wc -c < "$apk" | tr -d ' ')
+            sha256=$(sha256sum "$apk" | cut -d' ' -f1)
+            python3 scripts/gen_update_manifest.py \
+              "$name" "$TAG" "$VERSION_NAME" "$VERSION_CODE" "$SHORT_SHA" "$size" "$sha256" "$BASE_URL"
+          done
+          ls -lh dist/*.json 2>/dev/null || echo "no manifests generated"
+
+          if gh release view "$CHANNEL_TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release upload "$CHANNEL_TAG" -R "$REPO" dist/*.json --clobber
+            echo "update-channel manifests updated"
+          else
+            gh release create "$CHANNEL_TAG" -R "$REPO" --target main \
+              --title "Update channel manifests" \
+              --notes "本项目(qznet/webhtv-silent1566)自动更新清单，供 app 内检查更新使用。" \
+              --prerelease dist/*.json
+            echo "update-channel release created"
           fi
 
       - name: Upload build artifacts (fallback)
