@@ -510,6 +510,22 @@ public class CastActivity extends PlaybackActivity implements CustomKeyDownVod.L
         showControl();
     }
 
+    // 投屏场景不提供倍速调节，短按上下键统一唤出控制栏。
+    @Override
+    public void onSpeedStepUp() {
+        showControl();
+    }
+
+    @Override
+    public void onSpeedStepDown() {
+        showControl();
+    }
+
+    @Override
+    public void onShowControl() {
+        showControl();
+    }
+
     @Override
     public void onKeyCenter() {
         if (player().isPlaying()) onPaused();
