@@ -324,17 +324,37 @@ jobs:
           if [ "$PRERELEASE" = "true" ]; then
             PRERELEASE_FLAG="--prerelease"
           fi
-          if gh release view "${{ steps.meta.outputs.tag }}" -R "$REPO" >/dev/null 2>&1; then
-            gh release upload "${{ steps.meta.outputs.tag }}" -R "$REPO" dist/*.apk --clobber
+          TAG="${{ steps.meta.outputs.tag }}"
+          # 更新已存在的 release 时，同时更新说明
+          if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" -R "$REPO" dist/*.apk --clobber
+            gh release edit "$TAG" -R "$REPO" --notes-file release-notes.md \
+              $([ "$PRERELEASE" = "true" ] && echo "--prerelease" || echo "")
           else
-            gh release create "${{ steps.meta.outputs.tag }}" \
+            gh release create "$TAG" \
               -R "$REPO" \
               --target main \
-              --title "${{ steps.meta.outputs.tag }}" \
+              --title "$TAG" \
               --notes-file release-notes.md \
               $PRERELEASE_FLAG \
               dist/*.apk
           fi
+
+          # 清理不在本次发布范围内的历史资产（beta 只发 v7a 时移除旧的 arm64/mobile 包）
+          echo "本次发布包含："
+          (cd dist && ls *.apk) | sed 's/^/  /'
+          KEEP_LIST="$(cd dist && ls *.apk 2>/dev/null || true)"
+          for aid in $(gh release view "$TAG" -R "$REPO" --json assets --jq '.assets[] | select(.name | endswith(".apk")) | .id'); do
+            aname=$(gh api "repos/$REPO/releases/assets/$aid" --jq .name 2>/dev/null || echo "")
+            [ -z "$aname" ] && continue
+            if printf '%s\n' "$KEEP_LIST" | grep -qx "$aname"; then
+              continue
+            fi
+            echo "删除范围外资产：$aname"
+            gh api -X DELETE "repos/$REPO/releases/assets/$aid" >/dev/null 2>&1 || true
+          done
+          echo "最终资产："
+          gh release view "$TAG" -R "$REPO" --json assets --jq '.assets[].name'
 
       - name: Publish update-channel manifest (供 app 内检查更新)
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
