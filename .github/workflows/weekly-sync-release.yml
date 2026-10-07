@@ -144,6 +144,24 @@ jobs:
         if: steps.guard.outputs.Patched == 'true'
         run: git push origin main
 
+      - name: Determine build scope (beta=TV v7a only / stable=all 4)
+        id: scope
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        env:
+          TARGET: ${{ steps.merge.outputs.target }}
+          TRACK: ${{ inputs.track || 'auto' }}
+        run: |
+          # beta 跟随时只构建电视 v7a（leanback armeabi-v7a）；正式版构建全量 4 个包
+          if [[ "$TARGET" == *-beta-* ]] && [ "$TARGET" != "main" ] && [ -n "$TARGET" ]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "scope=beta" >> "$GITHUB_OUTPUT"
+            echo "构建范围：beta（仅电视 leanback armeabi-v7a）"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "scope=stable" >> "$GITHUB_OUTPUT"
+            echo "构建范围：正式版（全量 4 flavor）"
+          fi
+
       - name: Set up JDK 21
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
         uses: actions/setup-java@v4
@@ -189,23 +207,39 @@ jobs:
           rm -f gradle/gradle-daemon-jvm.properties
           echo "org.gradle.java.installations.auto-download=false" >> gradle.properties
 
-      - name: Build four debug APKs
+      - name: Build debug APKs by scope - beta TV v7a only, stable all 4
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        env:
+          SCOPE: ${{ steps.scope.outputs.scope }}
         run: |
-          ./gradlew \
-            :app:assembleMobileArm64_v8aDebug \
-            :app:assembleMobileArmeabi_v7aDebug \
-            :app:assembleLeanbackArm64_v8aDebug \
-            :app:assembleLeanbackArmeabi_v7aDebug \
-            --no-daemon
+          if [ "$SCOPE" = "beta" ]; then
+            echo ">> beta 构建：仅电视 leanback armeabi-v7a"
+            ./gradlew :app:assembleLeanbackArmeabi_v7aDebug --no-daemon
+          else
+            echo ">> 正式版构建：全量 4 flavor"
+            ./gradlew \
+              :app:assembleMobileArm64_v8aDebug \
+              :app:assembleMobileArmeabi_v7aDebug \
+              :app:assembleLeanbackArm64_v8aDebug \
+              :app:assembleLeanbackArmeabi_v7aDebug \
+              --no-daemon
+          fi
 
       - name: Collect artifacts
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        env:
+          SCOPE: ${{ steps.scope.outputs.scope }}
         run: |
           rm -rf dist
           mkdir -p dist
           find app/build/outputs/apk -name '*.apk' -exec cp {} dist/ \;
           ls -lh dist/
+          if [ "$SCOPE" = "beta" ]; then
+            # beta 仅发布电视 v7a，避免多余包
+            find dist -name '*.apk' ! -name 'app-leanback-armeabi_v7a-*' -print -delete
+            echo "beta 模式：仅保留 ->"
+            ls -lh dist/
+          fi
 
       - name: Resolve release tag
         id: meta
@@ -235,6 +269,7 @@ jobs:
           TARGET: ${{ steps.merge.outputs.target }}
           TRACK: ${{ inputs.track || 'auto' }}
           TAG: ${{ steps.meta.outputs.tag }}
+          SCOPE: ${{ steps.scope.outputs.scope }}
         run: |
           PREV_TAG="$(gh release list -R "${{ github.repository }}" --limit 100 --json tagName \
             --jq '[.[] | select(.tagName != env.TAG)] | sort_by(.tagName) | last | .tagName // ""' 2>/dev/null || echo '')"
@@ -245,6 +280,18 @@ jobs:
             echo "- 跟随上游：\`Silent1566/webhtv\`（track=\`$TRACK\`，目标 \`$TARGET\`）"
             echo "- 对比上一版本：${PREV_TAG:-无（首个版本）}"
             echo
+            if [ "$SCOPE" = "beta" ]; then
+              echo "### 本次包（beta 仅电视版）"
+              echo "- \`app-leanback-armeabi_v7a-debug.apk\` —— 电视版（v7a）"
+              echo
+            else
+              echo "### 本次包（正式版全量 4 个）"
+              echo "- \`app-leanback-arm64_v8a-debug.apk\` —— 电视版（arm64）"
+              echo "- \`app-leanback-armeabi_v7a-debug.apk\` —— 电视版（v7a）"
+              echo "- \`app-mobile-arm64_v8a-debug.apk\` —— 手机版（arm64）"
+              echo "- \`app-mobile-armeabi_v7a-debug.apk\` —— 手机版（v7a）"
+              echo
+            fi
             echo "### 本仓库定制"
             echo "- 全屏播放中：短按上下键调节倍速（±0.1，范围 0.25–5.0），暂停时不生效"
             echo "- 长按下键：唤出控制栏；长按上键：连续调速（上游原有行为）"
