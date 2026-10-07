@@ -144,12 +144,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
-            gh release upload "${{ steps.meta.outputs.tag }}" dist/*.apk --clobber
+          REPO="${{ github.repository }}"
+          if gh release view "${{ steps.meta.outputs.tag }}" -R "$REPO" >/dev/null 2>&1; then
+            gh release upload "${{ steps.meta.outputs.tag }}" -R "$REPO" dist/*.apk --clobber
           else
             gh release create "${{ steps.meta.outputs.tag }}" \
+              -R "$REPO" \
               --target main \
               --title "${{ steps.meta.outputs.tag }}" \
               --notes "每周自动跟随上游 Silent1566/webhtv 更新构建（调试版，可直接 sideload）。" \
               dist/*.apk
           fi
+
+      - name: Upload build artifacts (fallback)
+        if: always() && (steps.merge.outputs.changed == 'true' || inputs.force_release == true)
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-apks-${{ steps.meta.outputs.tag }}
+          path: dist/*.apk
+          if-no-files-found: warn
+          retention-days: 30
