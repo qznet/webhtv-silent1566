@@ -1,0 +1,146 @@
+name: Weekly Sync Upstream & Release
+
+on:
+  schedule:
+    - cron: "0 18 * * 0"   # 每周一 02:00 北京时间（UTC 周日 18:00）
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "Upstream branch/ref to merge"
+        required: false
+        default: "main"
+        type: string
+      force_release:
+        description: "Force release even if no upstream change"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  sync-and-release:
+    name: Sync upstream, build 4 APKs, release
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.email "action@webhtv.local"
+          git config user.name "sync-bot"
+
+      - name: Merge upstream (Silent1566)
+        id: merge
+        run: |
+          git remote add upstream https://github.com/Silent1566/webhtv.git || true
+          git remote set-url upstream https://github.com/Silent1566/webhtv.git
+          git fetch upstream --tags
+          echo "Upstream tip: $(git rev-parse --short upstream/${{ inputs.upstream_ref }})"
+          BEFORE=$(git rev-parse HEAD)
+          git merge -X theirs --no-commit --no-edit upstream/${{ inputs.upstream_ref }} || true
+          git checkout $BEFORE -- .github
+          if git diff --cached --quiet; then
+            git merge --abort 2>/dev/null || true
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No upstream changes."
+          else
+            git commit --no-edit
+            AFTER=$(git rev-parse HEAD)
+            if [ "$BEFORE" != "$AFTER" ]; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Push main
+        if: steps.merge.outputs.changed == 'true'
+        run: git push origin main
+
+      - name: Set up JDK 21
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Python 3.10
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up Android SDK
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android packages
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        run: |
+          sdkmanager "platform-tools" "platforms;android-28" "build-tools;36.0.0"
+          curl -fsSL -o /tmp/platform-37.zip https://dl.google.com/android/repository/platform-37.0_r01.zip
+          rm -rf /tmp/platform-37 "$ANDROID_HOME/platforms/android-37"
+          mkdir -p /tmp/platform-37 "$ANDROID_HOME/platforms"
+          unzip -q /tmp/platform-37.zip -d /tmp/platform-37
+          platform_jar="$(find /tmp/platform-37 -name android.jar -print -quit)"
+          test -n "$platform_jar"
+          mv "$(dirname "$platform_jar")" "$ANDROID_HOME/platforms/android-37"
+
+      - name: Grant execute permission for gradlew
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        run: chmod +x ./gradlew
+
+      - name: Build four debug APKs
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        run: |
+          ./gradlew \
+            :app:assembleMobileArm64_v8aDebug \
+            :app:assembleMobileArmeabi_v7aDebug \
+            :app:assembleLeanbackArm64_v8aDebug \
+            :app:assembleLeanbackArmeabi_v7aDebug \
+            --no-daemon
+
+      - name: Collect artifacts
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        run: |
+          rm -rf dist
+          mkdir -p dist
+          find app/build/outputs/apk -name '*.apk' -exec cp {} dist/ \;
+          ls -lh dist/
+
+      - name: Resolve release tag
+        id: meta
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        run: |
+          VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
+          TAG="v${VERSION_NAME}-weekly-$(date +%Y%m%d)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            gh release upload "${{ steps.meta.outputs.tag }}" dist/*.apk --clobber
+          else
+            gh release create "${{ steps.meta.outputs.tag }}" \
+              --target main \
+              --title "${{ steps.meta.outputs.tag }}" \
+              --notes "每周自动跟随上游 Silent1566/webhtv 更新构建（调试版，可直接 sideload）。" \
+              dist/*.apk
+          fi
