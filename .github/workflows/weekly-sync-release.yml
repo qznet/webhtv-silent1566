@@ -344,9 +344,9 @@ jobs:
           echo "本次发布包含："
           (cd dist && ls *.apk) | sed 's/^/  /'
           KEEP_LIST="$(cd dist && ls *.apk 2>/dev/null || true)"
-          # 一次性导出 "id<TAB>name"，避免在 jq 内做字符串/数字比较（asset id 形如 RA_xxx 是字符串）
-          gh release view "$TAG" -R "$REPO" --json assets \
-            --jq '.assets[] | select(.name | endswith(".apk")) | "\(.id)\t\(.name)"' \
+          # 注意：gh release view --json assets 的 id 是 GraphQL node id（RA_xxx），
+          # REST 删除接口需要数字 id，必须走 gh api（且 gh api 不支持 -R，仓库写进路径）。
+          gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets[] | select(.name | endswith(".apk")) | "\(.id)\t\(.name)"' \
             > /tmp/assets.tsv || true
           while IFS=$'\t' read -r aid aname; do
             [ -z "$aid" ] && continue
