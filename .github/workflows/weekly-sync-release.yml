@@ -5,8 +5,17 @@ on:
     - cron: "0 18 * * 0"   # 每周一 02:00 北京时间（UTC 周日 18:00）
   workflow_dispatch:
     inputs:
+      track:
+        description: "跟随目标：main=上游 main 分支；beta=上游最新 beta 预发布 tag；ref=手动指定（配合 upstream_ref）"
+        required: false
+        default: "main"
+        type: choice
+        options:
+          - main
+          - beta
+          - ref
       upstream_ref:
-        description: "Upstream branch/ref to merge"
+        description: "仅当 track=ref 时使用：上游分支/标签名"
         required: false
         default: "main"
         type: string
@@ -42,13 +51,48 @@ jobs:
 
       - name: Merge upstream (Silent1566)
         id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRACK: ${{ inputs.track || 'main' }}
+          UPSTREAM_REF: ${{ inputs.upstream_ref || 'main' }}
         run: |
           git remote add upstream https://github.com/Silent1566/webhtv.git || true
           git remote set-url upstream https://github.com/Silent1566/webhtv.git
-          git fetch upstream --tags
-          echo "Upstream tip: $(git rev-parse --short upstream/${{ inputs.upstream_ref }})"
+          git fetch upstream --tags --force
+
+          # 解析合并目标：main 分支 / 最新 beta 预发布 tag / 手动指定 ref
+          TARGET=""
+          case "$TRACK" in
+            main) TARGET="main" ;;
+            beta)
+              TARGET="$(gh api repos/Silent1566/webhtv/releases \
+                --jq '[.[] | select(.draft == false and .prerelease == true)] | sort_by(.published_at) | last | .tag_name')"
+              ;;
+            ref)  TARGET="$UPSTREAM_REF" ;;
+            *)    TARGET="main" ;;
+          esac
+          if [ -z "$TARGET" ]; then
+            echo "::error title=No upstream target::Failed to resolve beta tag or ref"
+            exit 1
+          fi
+          echo "Track mode: $TRACK -> target: $TARGET"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Upstream target commit: $(git rev-parse --short upstream/$TARGET 2>/dev/null || echo 'tag-only, fetch by tag')"
+
+          # beta 可能是仅存在于 tag 的提交，先确保该 target 对象已取到
+          git fetch upstream "refs/tags/$TARGET:refs/tags/upstream-$TARGET" 2>/dev/null || true
+          if git rev-parse --verify --quiet "upstream/$TARGET" >/dev/null; then
+            REF_TO_MERGE="upstream/$TARGET"
+          elif git rev-parse --verify --quiet "refs/tags/upstream-$TARGET" >/dev/null; then
+            REF_TO_MERGE="refs/tags/upstream-$TARGET"
+          else
+            echo "::error title=Target not found::Cannot resolve upstream/$TARGET"
+            exit 1
+          fi
+          echo "Merging: $REF_TO_MERGE"
+
           BEFORE=$(git rev-parse HEAD)
-          git merge -X theirs --no-commit --no-edit upstream/${{ inputs.upstream_ref }} || true
+          git merge -X theirs --no-commit --no-edit "$REF_TO_MERGE" || true
           git checkout $BEFORE -- .github
           if git diff --cached --quiet; then
             git merge --abort 2>/dev/null || true
@@ -134,10 +178,19 @@ jobs:
       - name: Resolve release tag
         id: meta
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        env:
+          TARGET: ${{ steps.merge.outputs.target }}
+          TRACK: ${{ inputs.track || 'main' }}
         run: |
           VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
-          TAG="v${VERSION_NAME}-weekly-$(date +%Y%m%d)"
+          # beta 跟随时沿用上游 beta tag 命名（去掉 v 前缀作为后缀），便于识别来源
+          if [ "$TRACK" = "beta" ] && [[ "$TARGET" == v*-beta-* ]]; then
+            TAG="v${VERSION_NAME}-sync-${TARGET#v}"
+          else
+            TAG="v${VERSION_NAME}-weekly-$(date +%Y%m%d)"
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Source: track=$TRACK target=$TARGET"
 
       - name: Create GitHub Release
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
@@ -152,7 +205,7 @@ jobs:
               -R "$REPO" \
               --target main \
               --title "${{ steps.meta.outputs.tag }}" \
-              --notes "每周自动跟随上游 Silent1566/webhtv 更新构建（调试版，可直接 sideload）。" \
+              --notes "自动跟随上游 Silent1566/webhtv（track=${{ inputs.track || 'main' }}，target=${{ steps.merge.outputs.target }}）构建的调试版，可直接 sideload。" \
               dist/*.apk
           fi
 
