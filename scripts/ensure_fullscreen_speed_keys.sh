@@ -13,6 +13,7 @@ set -euo pipefail
 
 CK="app/src/leanback/java/com/fongmi/android/tv/ui/custom/CustomKeyDownVod.java"
 VA="app/src/leanback/java/com/fongmi/android/tv/ui/activity/VideoActivity.java"
+CA="app/src/leanback/java/com/fongmi/android/tv/ui/activity/CastActivity.java"
 
 fail() {
   echo "::error title=全屏调速定制缺失::$1"
@@ -52,6 +53,14 @@ if grep -q "private void stepSpeed(float delta)" "$VA"; then
 else
   echo "WARN VideoActivity 缺少 stepSpeed，尝试重新应用"
   need_fix=1
+fi
+
+if [ "$need_fix" -eq 0 ]; then
+  # 定制完好时仍需确认所有 Listener 实现类都补齐了新方法（CastActivity 投屏也实现了该接口）
+  if [ -f "$CA" ] && ! grep -q "public void onSpeedStepUp()" "$CA"; then
+    echo "WARN CastActivity 未实现 onSpeedStepUp（Listener 新方法），尝试补齐"
+    need_fix=1
+  fi
 fi
 
 if [ "$need_fix" -eq 0 ]; then
@@ -179,12 +188,58 @@ else:
         sys.exit(3)
 PY
 
+# ---- 4b. 重新应用：CastActivity（另一个 Listener 实现类，投屏场景不调速，仅唤出控制栏）----
+if [ -f "$CA" ] && ! grep -q "public void onSpeedStepUp()" "$CA"; then
+python3 - "$CA" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+anchor = """    @Override
+    public void onKeyDown() {
+        showControl();
+    }"""
+block = anchor + """
+
+    // 投屏场景不提供倍速调节，短按上下键统一唤出控制栏。
+    @Override
+    public void onSpeedStepUp() {
+        showControl();
+    }
+
+    @Override
+    public void onSpeedStepDown() {
+        showControl();
+    }
+
+    @Override
+    public void onShowControl() {
+        showControl();
+    }"""
+if anchor in s:
+    s = s.replace(anchor, block, 1)
+    open(p, "w", encoding="utf-8").write(s)
+    print("  CastActivity: Listener methods inserted")
+else:
+    print("  ERROR: could not locate onKeyDown anchor in CastActivity")
+    sys.exit(3)
+PY
+fi
+
 # ---- 5. 复检 ----
 echo "复检..."
 rc=0
 for pat in "onSpeedStepUp" "onSpeedStepDown" "onShowControl"; do
   if ! grep -q "$pat" "$CK"; then echo "::error title=补丁复检失败::CustomKeyDownVod 仍缺 $pat"; rc=1; fi
 done
+# 接口必须保留 onKeyUp/onKeyDown（CastActivity 等实现类依赖）
+for pat in "void onKeyUp();" "void onKeyDown();"; do
+  if ! grep -q "$pat" "$CK"; then echo "::error title=补丁复检失败::Listener 仍缺 $pat（会导致实现类编译失败）"; rc=1; fi
+done
 if ! grep -q "private void stepSpeed(float delta)" "$VA"; then echo "::error title=补丁复检失败::VideoActivity 仍缺 stepSpeed"; rc=1; fi
+if [ -f "$CA" ]; then
+  for pat in "public void onSpeedStepUp()" "public void onSpeedStepDown()" "public void onShowControl()"; do
+    if ! grep -q "$pat" "$CA"; then echo "::error title=补丁复检失败::CastActivity 仍缺 $pat（Listener 实现不完整）"; rc=1; fi
+  done
+fi
 [ "$rc" -eq 0 ] && echo "全屏调速定制已修复并复检通过。"
 exit $rc
