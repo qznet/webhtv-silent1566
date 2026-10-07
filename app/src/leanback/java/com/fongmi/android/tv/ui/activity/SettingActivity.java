@@ -18,6 +18,7 @@ import com.fongmi.android.tv.bean.Live;
 import com.fongmi.android.tv.bean.Site;
 import com.fongmi.android.tv.databinding.ActivitySettingBinding;
 import com.fongmi.android.tv.db.AppDatabase;
+import com.fongmi.android.tv.setting.ConfigSyncPolicy;
 import com.fongmi.android.tv.event.ConfigEvent;
 import com.fongmi.android.tv.event.RefreshEvent;
 import com.fongmi.android.tv.impl.Callback;
@@ -28,7 +29,6 @@ import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.ui.base.BaseActivity;
 import com.fongmi.android.tv.ui.dialog.AboutDialog;
 import com.fongmi.android.tv.ui.dialog.AppearanceDialog;
-import com.fongmi.android.tv.ui.dialog.ConfigDialog;
 import com.fongmi.android.tv.ui.dialog.DohDialog;
 import com.fongmi.android.tv.ui.dialog.HistoryDialog;
 import com.fongmi.android.tv.ui.dialog.LiveDialog;
@@ -36,6 +36,9 @@ import com.fongmi.android.tv.ui.dialog.RestoreDialog;
 import com.fongmi.android.tv.ui.dialog.BackupProgressDialog;
 import com.fongmi.android.tv.ui.dialog.SiteDialog;
 import com.fongmi.android.tv.utils.AppVersion;
+import com.fongmi.android.tv.cache.CacheCenter;
+import com.fongmi.android.tv.cache.CachePolicyStore;
+import com.fongmi.android.tv.ui.dialog.CacheManagementDialog;
 import com.fongmi.android.tv.utils.FileUtil;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.PermissionUtil;
@@ -92,10 +95,23 @@ public class SettingActivity extends BaseActivity implements ConfigListener, Sit
     }
 
     private void setCacheText() {
-        FileUtil.getCacheSize(new Callback() {
-            @Override
-            public void success(String result) {
-                mBinding.cacheText.setText(result);
+        if (!CachePolicyStore.isManagementEnabled()) {
+            FileUtil.getCacheSize(new Callback() {
+                @Override
+                public void success(String result) {
+                    if (mBinding != null) mBinding.cacheText.setText(result);
+                }
+            });
+            return;
+        }
+        mBinding.cacheText.setText(R.string.cache_management_scanning);
+        CacheCenter.get().requestSnapshot(false, snapshot -> {
+            if (mBinding != null && !isFinishing() && !isDestroyed()) {
+                String total = FileUtil.byteCountToDisplaySize(snapshot.totalBytes());
+                long quota = snapshot.systemQuotaBytes();
+                mBinding.cacheText.setText(quota > 0
+                        ? getString(R.string.cache_management_inline, total, FileUtil.byteCountToDisplaySize(quota))
+                        : total);
             }
         });
     }
@@ -119,11 +135,8 @@ public class SettingActivity extends BaseActivity implements ConfigListener, Sit
         mBinding.personal.setOnClickListener(this::onPersonal);
         mBinding.restore.setOnClickListener(this::onRestore);
         mBinding.version.setOnClickListener(this::onVersion);
-        mBinding.vod.setOnLongClickListener(this::onVodEdit);
         mBinding.vodHome.setOnClickListener(this::onVodHome);
-        mBinding.live.setOnLongClickListener(this::onLiveEdit);
         mBinding.liveHome.setOnClickListener(this::onLiveHome);
-        mBinding.wall.setOnLongClickListener(this::onWallEdit);
         mBinding.incognito.setOnClickListener(this::setIncognito);
         mBinding.vodHistory.setOnClickListener(this::onVodHistory);
         mBinding.liveHistory.setOnClickListener(this::onLiveHistory);
@@ -146,7 +159,12 @@ public class SettingActivity extends BaseActivity implements ConfigListener, Sit
     private void load(Config config) {
         switch (config.getType()) {
             case 0:
+                String previousVodUrl = VodConfig.getUrl();
                 VodConfig.load(config, getCallback());
+                if (ConfigSyncPolicy.shouldSyncLive(previousVodUrl, LiveConfig.getUrl())) {
+                    Config liveConfig = AppDatabase.get().getConfigDao().find(config.getUrl(), 1);
+                    if (liveConfig != null) LiveConfig.load(liveConfig, new Callback());
+                }
                 break;
             case 1:
                 LiveConfig.load(config, getCallback());
@@ -190,30 +208,15 @@ public class SettingActivity extends BaseActivity implements ConfigListener, Sit
     }
 
     private void onVod(View view) {
-        ConfigDialog.create().vod().show(this);
+        HistoryDialog.create().vod().manage().show(this);
     }
 
     private void onLive(View view) {
-        ConfigDialog.create().live().show(this);
+        HistoryDialog.create().live().manage().show(this);
     }
 
     private void onWall(View view) {
-        ConfigDialog.create().wall().show(this);
-    }
-
-    private boolean onVodEdit(View view) {
-        ConfigDialog.create().vod().edit().show(this);
-        return true;
-    }
-
-    private boolean onLiveEdit(View view) {
-        ConfigDialog.create().live().edit().show(this);
-        return true;
-    }
-
-    private boolean onWallEdit(View view) {
-        ConfigDialog.create().wall().edit().show(this);
-        return true;
+        HistoryDialog.create().wall().manage().show(this);
     }
 
     private void onVodHome(View view) {
@@ -306,12 +309,16 @@ public class SettingActivity extends BaseActivity implements ConfigListener, Sit
     }
 
     private void onCache(View view) {
-        FileUtil.clearCache(new Callback() {
-            @Override
-            public void success() {
-                setCacheText();
-            }
-        });
+        if (!CachePolicyStore.isManagementEnabled()) {
+            FileUtil.clearCache(new Callback() {
+                @Override
+                public void success() {
+                    setCacheText();
+                }
+            });
+            return;
+        }
+        CacheManagementDialog.show(this);
     }
 
     private void onBackup(View view) {
@@ -374,6 +381,19 @@ public class SettingActivity extends BaseActivity implements ConfigListener, Sit
         mBinding.vodUrl.setText(VodConfig.getDesc());
         mBinding.liveUrl.setText(LiveConfig.getDesc());
         setWallText();
+    }
+
+    /**
+     * Re-reads the cache inventory the moment a cleanup (or any other cache mutation) finishes.
+     *
+     * <p>Without this the settings row kept the pre-cleanup value until the user left the activity
+     * and opened it again, because nothing told the row the cache had changed.</p>
+     */
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onRefreshEvent(RefreshEvent event) {
+        if (event.getType() != RefreshEvent.Type.CACHE) return;
+        if (mBinding == null || isFinishing() || isDestroyed()) return;
+        setCacheText();
     }
 
     private void setWallText() {
