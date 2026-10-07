@@ -8256,6 +8256,32 @@ private boolean runtimeSourceOnly;
     }
 
     @Override
+    public void onSpeedStepUp() {
+        stepSpeed(0.1f);
+    }
+
+    @Override
+    public void onSpeedStepDown() {
+        stepSpeed(-0.1f);
+    }
+
+    @Override
+    public void onShowControl() {
+        showControl(getFocus2());
+    }
+
+    /** 全屏播放中短按上下键调节倍速（±0.1），暂停时不生效。 */
+    private void stepSpeed(float delta) {
+        if (player() == null || !player().isPlaying()) return;
+        float speed = Math.round((player().getSpeed() + delta) * 10f) / 10f;
+        speed = Math.min(5.0f, Math.max(0.25f, speed));
+        CharSequence text = player().setSpeed(speed);
+        mBinding.control.action.speed.setText(text);
+        Notify.show(String.valueOf(text));
+        if (mHistory != null) mHistory.setUserSpeed(player().getSpeed());
+    }
+
+    @Override
     public void onKeyCenter() {
         if (player() == null) return;
         if (player().isPlaying()) onPaused();
