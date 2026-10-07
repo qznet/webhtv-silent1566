@@ -6,13 +6,14 @@ on:
   workflow_dispatch:
     inputs:
       track:
-        description: "跟随目标：main=上游 main 分支；beta=上游最新 beta 预发布 tag；ref=手动指定（配合 upstream_ref）"
+        description: "跟随目标：auto=上游最新发布版（正式或 beta，哪个新跟哪个）；beta=仅最新 beta 预发布；main=上游 main 分支；ref=手动指定"
         required: false
-        default: "main"
+        default: "auto"
         type: choice
         options:
-          - main
+          - auto
           - beta
+          - main
           - ref
       upstream_ref:
         description: "仅当 track=ref 时使用：上游分支/标签名"
@@ -53,21 +54,26 @@ jobs:
         id: merge
         env:
           GH_TOKEN: ${{ github.token }}
-          TRACK: ${{ inputs.track || 'main' }}
+          TRACK: ${{ inputs.track || 'auto' }}
           UPSTREAM_REF: ${{ inputs.upstream_ref || 'main' }}
         run: |
           git remote add upstream https://github.com/Silent1566/webhtv.git || true
           git remote set-url upstream https://github.com/Silent1566/webhtv.git
           git fetch upstream --tags --force
 
-          # 解析合并目标：main 分支 / 最新 beta 预发布 tag / 手动指定 ref
+          # 解析合并目标：auto=最新发布版(正式或beta) / beta / main / 手动 ref
           TARGET=""
           case "$TRACK" in
-            main) TARGET="main" ;;
+            auto)
+              # 取最新发布的非草稿 release（正式版与 beta 混在一起比 published_at，谁新跟谁）
+              TARGET="$(gh api repos/Silent1566/webhtv/releases \
+                --jq '[.[] | select(.draft == false)] | sort_by(.published_at) | last | .tag_name')"
+              ;;
             beta)
               TARGET="$(gh api repos/Silent1566/webhtv/releases \
                 --jq '[.[] | select(.draft == false and .prerelease == true)] | sort_by(.published_at) | last | .tag_name')"
               ;;
+            main) TARGET="main" ;;
             ref)  TARGET="$UPSTREAM_REF" ;;
             *)    TARGET="main" ;;
           esac
@@ -180,24 +186,33 @@ jobs:
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
         env:
           TARGET: ${{ steps.merge.outputs.target }}
-          TRACK: ${{ inputs.track || 'main' }}
+          TRACK: ${{ inputs.track || 'auto' }}
         run: |
           VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
-          # beta 跟随时沿用上游 beta tag 命名（去掉 v 前缀作为后缀），便于识别来源
-          if [ "$TRACK" = "beta" ] && [[ "$TARGET" == v*-beta-* ]]; then
-            TAG="v${VERSION_NAME}-sync-${TARGET#v}"
+          # 跟随上游 tag 时保留其 beta 标识（去掉版本号前缀避免重复 v5.6.0-sync-5.6.0-...）
+          PRERELEASE=false
+          if [[ "$TARGET" == *-beta-* ]] && [ "$TARGET" != "main" ] && [ -n "$TARGET" ]; then
+            TAG="v${VERSION_NAME}-sync-beta-${TARGET##*-beta-}"   # v5.6.0-beta-202610052020 -> v5.6.0-sync-beta-202610052020
+            PRERELEASE=true
           else
             TAG="v${VERSION_NAME}-weekly-$(date +%Y%m%d)"
+            PRERELEASE=false
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "Source: track=$TRACK target=$TARGET"
 
       - name: Create GitHub Release
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
         run: |
           REPO="${{ github.repository }}"
+          PRERELEASE_FLAG=""
+          if [ "$PRERELEASE" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
           if gh release view "${{ steps.meta.outputs.tag }}" -R "$REPO" >/dev/null 2>&1; then
             gh release upload "${{ steps.meta.outputs.tag }}" -R "$REPO" dist/*.apk --clobber
           else
@@ -205,7 +220,8 @@ jobs:
               -R "$REPO" \
               --target main \
               --title "${{ steps.meta.outputs.tag }}" \
-              --notes "自动跟随上游 Silent1566/webhtv（track=${{ inputs.track || 'main' }}，target=${{ steps.merge.outputs.target }}）构建的调试版，可直接 sideload。" \
+              --notes "自动跟随上游 Silent1566/webhtv（track=${{ inputs.track || 'auto' }}，target=${{ steps.merge.outputs.target }}）构建的调试版，可直接 sideload。" \
+              $PRERELEASE_FLAG \
               dist/*.apk
           fi
 
