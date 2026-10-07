@@ -104,6 +104,15 @@ jobs:
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
         run: chmod +x ./gradlew
 
+      - name: Drop JetBrains daemon JVM toolchain (foojay 400 workaround)
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        run: |
+          # gradle/gradle-daemon-jvm.properties 强制用 JetBrains JDK 21 并走 foojay 下载，
+          # 当前 foojay 对该 ID 返回 400 导致守护进程起不来。删除后 Gradle 改用已装好的
+          # Temurin JDK 21（setup-java 提供）运行守护进程，编译不受影响。仅改工作树，不提交。
+          rm -f gradle/gradle-daemon-jvm.properties
+          echo "org.gradle.java.installations.auto-download=false" >> gradle.properties
+
       - name: Build four debug APKs
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
         run: |
