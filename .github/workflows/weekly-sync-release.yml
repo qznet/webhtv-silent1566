@@ -234,14 +234,31 @@ jobs:
           rm -f gradle/gradle-daemon-jvm.properties
           echo "org.gradle.java.installations.auto-download=false" >> gradle.properties
 
+      - name: Setup fixed debug signing keystore (固定签名，解决覆盖安装)
+        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        run: |
+          mkdir -p ~/.android
+          rm -f ~/.android/debug.keystore
+          "$JAVA_HOME/bin/keytool" -importkeystore \
+            -srckeystore ci/debug.keystore.p12 \
+            -srcstoretype PKCS12 -srcstorepass android -srckeypass android \
+            -srcalias androiddebugkey \
+            -destkeystore ~/.android/debug.keystore \
+            -deststoretype JKS -deststorepass android -destkeypass android
+          echo ">> 固定 debug keystore 已就位 (alias=androiddebugkey, storepass=android)"
+
       - name: Build debug APKs by scope - beta TV v7a only, stable all 4
+        id: build
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
         env:
           SCOPE: ${{ steps.scope.outputs.scope }}
         run: |
+          VCODE=$(date +%Y%m%d%H)
+          echo "vcode=$VCODE" >> "$GITHUB_OUTPUT"
+          echo ">> 注入 versionCode=$VCODE (覆盖默认 560，确保 app 内可检测新版本)"
           if [ "$SCOPE" = "beta" ]; then
             echo ">> beta 构建：仅电视 leanback armeabi-v7a"
-            ./gradlew :app:assembleLeanbackArmeabi_v7aDebug --no-daemon
+            ./gradlew :app:assembleLeanbackArmeabi_v7aDebug --no-daemon -Pvcode=$VCODE
           else
             echo ">> 正式版构建：全量 4 flavor"
             ./gradlew \
@@ -249,8 +266,10 @@ jobs:
               :app:assembleMobileArmeabi_v7aDebug \
               :app:assembleLeanbackArm64_v8aDebug \
               :app:assembleLeanbackArmeabi_v7aDebug \
-              --no-daemon
+              --no-daemon -Pvcode=$VCODE
           fi
+          APK=$(find app/build/outputs/apk -name '*.apk' | head -1)
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" 2>/dev/null | grep -i version || echo "aapt 校验跳过"
 
       - name: Collect artifacts
         if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
@@ -403,7 +422,7 @@ jobs:
           REPO="${{ github.repository }}"
           CHANNEL_TAG="update-channel"
           VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
-          VERSION_CODE="$(sed -n 's/^[[:space:]]*versionCode[[:space:]]*\([0-9][0-9]*\).*/\1/p' app/build.gradle | head -1)"
+          VERSION_CODE="${{ steps.build.outputs.vcode }}"
           SHORT_SHA="$(git rev-parse --short=7 HEAD)"
           # leanback arm64 是 TV 主力包，作为默认 apk 目标
           APK_BASE="app-leanback-arm64_v8a-debug"
