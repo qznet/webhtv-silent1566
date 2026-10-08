@@ -289,7 +289,7 @@ jobs:
 
       - name: Resolve release tag
         id: meta
-        if: steps.merge.outputs.changed == 'true' && inputs.test_mode != true
+        if: (steps.merge.outputs.changed == 'true' || inputs.force_release == true) && inputs.test_mode != true
         env:
           TARGET: ${{ steps.merge.outputs.target }}
           TRACK: ${{ inputs.track || 'auto' }}
@@ -311,7 +311,7 @@ jobs:
 
       - name: Build release notes (期间更新内容)
         id: notes
-        if: steps.merge.outputs.changed == 'true' && inputs.test_mode != true
+        if: (steps.merge.outputs.changed == 'true' || inputs.force_release == true) && inputs.test_mode != true
         env:
           TARGET: ${{ steps.merge.outputs.target }}
           TRACK: ${{ inputs.track || 'auto' }}
@@ -361,7 +361,7 @@ jobs:
           cat release-notes.md
 
       - name: Create GitHub Release
-        if: steps.merge.outputs.changed == 'true' && inputs.test_mode != true
+        if: (steps.merge.outputs.changed == 'true' || inputs.force_release == true) && inputs.test_mode != true
         env:
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ steps.meta.outputs.prerelease }}
@@ -412,7 +412,7 @@ jobs:
           gh release view "$TAG" -R "$REPO" --json assets --jq '.assets[].name'
 
       - name: Publish update-channel manifest (供 app 内检查更新)
-        if: steps.merge.outputs.changed == 'true' && inputs.test_mode != true
+        if: (steps.merge.outputs.changed == 'true' || inputs.force_release == true) && inputs.test_mode != true
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
