@@ -298,10 +298,11 @@ jobs:
           # 跟随上游 tag 时保留其 beta 标识（去掉版本号前缀避免重复 v5.6.0-sync-5.6.0-...）
           PRERELEASE=false
           if [[ "$TARGET" == *-beta-* ]] && [ "$TARGET" != "main" ] && [ -n "$TARGET" ]; then
-            TAG="v${VERSION_NAME}-sync-beta-${TARGET##*-beta-}"   # v5.6.0-beta-202610052020 -> v5.6.0-sync-beta-202610052020
+            BUILD_TS="$(date +%H%M)"
+          TAG="v${VERSION_NAME}-sync-beta-${TARGET##*-beta-}-b${BUILD_TS}"   # v5.6.0-beta-202610052020 -> v5.6.0-sync-beta-202610052020-b1430
             PRERELEASE=true
           else
-            TAG="v${VERSION_NAME}-weekly-$(date +%Y%m%d)"
+            TAG="v${VERSION_NAME}-weekly-$(date +%Y%m%d-%H%M)"
             PRERELEASE=false
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
