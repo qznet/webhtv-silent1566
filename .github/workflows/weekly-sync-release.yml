@@ -25,6 +25,11 @@ on:
         required: false
         default: false
         type: boolean
+      test_mode:
+        description: "试合并模式：合并到临时分支并编译验证调速/编译，不出 release、不推送 main、不发布更新清单"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -56,7 +61,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TRACK: ${{ inputs.track || 'auto' }}
           UPSTREAM_REF: ${{ inputs.upstream_ref || 'main' }}
+          TEST_MODE: ${{ inputs.test_mode || 'false' }}
         run: |
+          TEST_MODE="${{ inputs.test_mode || 'false' }}"
+          if [ "$TEST_MODE" = "true" ]; then
+            TEST_BRANCH="sync-test-${{ github.run_id }}"
+            git checkout -b "$TEST_BRANCH"
+            echo ">> TEST MODE：合并目标为临时分支 $TEST_BRANCH（不推送 main、不出 release）"
+          fi
           git remote add upstream https://github.com/Silent1566/webhtv.git || true
           git remote set-url upstream https://github.com/Silent1566/webhtv.git
           git fetch upstream --tags --force
@@ -114,9 +126,15 @@ jobs:
             fi
           fi
 
-      - name: Push main
+      - name: Push result (main or test branch)
         if: steps.merge.outputs.changed == 'true'
-        run: git push origin main
+        run: |
+          if [ "${{ inputs.test_mode || 'false' }}" = "true" ]; then
+            echo ">> TEST MODE：推送临时分支（不推送 main）"
+            git push origin HEAD
+          else
+            git push origin main
+          fi
 
       - name: Ensure fullscreen speed-key customization
         id: guard
@@ -142,7 +160,12 @@ jobs:
 
       - name: Push guard fixes
         if: steps.guard.outputs.Patched == 'true'
-        run: git push origin main
+        run: |
+          if [ "${{ inputs.test_mode || 'false' }}" = "true" ]; then
+            git push origin HEAD
+          else
+            git push origin main
+          fi
 
       - name: Determine build scope (beta=TV v7a only / stable=all 4)
         id: scope
@@ -152,7 +175,11 @@ jobs:
           TRACK: ${{ inputs.track || 'auto' }}
         run: |
           # beta 跟随时只构建电视 v7a（leanback armeabi-v7a）；正式版构建全量 4 个包
-          if [[ "$TARGET" == *-beta-* ]] && [ "$TARGET" != "main" ] && [ -n "$TARGET" ]; then
+          if [ "${{ inputs.test_mode || 'false' }}" = "true" ]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "scope=beta" >> "$GITHUB_OUTPUT"
+            echo "TEST MODE：强制仅编电视 v7a 以快速验证"
+          elif [[ "$TARGET" == *-beta-* ]] && [ "$TARGET" != "main" ] && [ -n "$TARGET" ]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
             echo "scope=beta" >> "$GITHUB_OUTPUT"
             echo "构建范围：beta（仅电视 leanback armeabi-v7a）"
@@ -243,7 +270,7 @@ jobs:
 
       - name: Resolve release tag
         id: meta
-        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        if: steps.merge.outputs.changed == 'true' && inputs.test_mode != true
         env:
           TARGET: ${{ steps.merge.outputs.target }}
           TRACK: ${{ inputs.track || 'auto' }}
@@ -264,7 +291,7 @@ jobs:
 
       - name: Build release notes (期间更新内容)
         id: notes
-        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        if: steps.merge.outputs.changed == 'true' && inputs.test_mode != true
         env:
           TARGET: ${{ steps.merge.outputs.target }}
           TRACK: ${{ inputs.track || 'auto' }}
@@ -314,7 +341,7 @@ jobs:
           cat release-notes.md
 
       - name: Create GitHub Release
-        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        if: steps.merge.outputs.changed == 'true' && inputs.test_mode != true
         env:
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ steps.meta.outputs.prerelease }}
@@ -365,7 +392,7 @@ jobs:
           gh release view "$TAG" -R "$REPO" --json assets --jq '.assets[].name'
 
       - name: Publish update-channel manifest (供 app 内检查更新)
-        if: steps.merge.outputs.changed == 'true' || inputs.force_release == true
+        if: steps.merge.outputs.changed == 'true' && inputs.test_mode != true
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
@@ -404,10 +431,10 @@ jobs:
           fi
 
       - name: Upload build artifacts (fallback)
-        if: always() && (steps.merge.outputs.changed == 'true' || inputs.force_release == true)
+        if: steps.merge.outputs.changed == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: weekly-apks-${{ steps.meta.outputs.tag }}
+          name: weekly-apks-test-${{ github.run_id }}
           path: dist/*.apk
           if-no-files-found: warn
           retention-days: 30
