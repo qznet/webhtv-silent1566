@@ -68,4 +68,11 @@ public class Github {
     public static String getReleaseAssetApi(long id) {
         return GITHUB_RELEASE_ASSETS_API + "/" + id;
     }
+
+    /** Append a cache-buster query param so GitHub proxies/CDNs don't serve a stale cached manifest. */
+    public static String withCacheBuster(String url) {
+        if (url == null || url.isEmpty()) return url;
+        long t = System.currentTimeMillis();
+        return url + (url.contains("?") ? "&" : "?") + "_t=" + t;
+    }
 }
