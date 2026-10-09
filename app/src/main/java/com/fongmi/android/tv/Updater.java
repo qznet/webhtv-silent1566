@@ -246,7 +246,8 @@ public class Updater implements UpdateTransfer.Callback, UpdateListener {
         Update update = Update.empty(channel);
         try {
             GithubProxy.Config config = GithubProxy.config();
-            String proxiedUrl = config.rewrite(manifestUrl);
+            String bustedUrl = Github.withCacheBuster(manifestUrl);
+            String proxiedUrl = config.rewrite(bustedUrl);
             String text = UpdateHttp.string(proxiedUrl, headers, GITHUB_REQUEST_TIMEOUT_MS);
             if (TextUtils.isEmpty(text)) throw new IllegalStateException("Empty update manifest: " + manifestUrl);
             JSONObject object = new JSONObject(text);
