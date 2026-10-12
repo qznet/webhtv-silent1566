@@ -93,6 +93,16 @@ android {
     sourceSets.androidTest.assets.srcDir(files("$projectDir/schemas").files)
 
     signingConfigs {
+        debug {
+            // 固定签名：显式指向仓库内 keystore，不依赖 ~/.android/debug.keystore 默认路径
+            // （CI runner 上 AGP 默认路径判定不可靠，曾导致每次构建随机生成 debug key、无法覆盖安装）
+            // 保证所有 CI 产物与本地构建签名一致（CN=Android Debug, O=qznet），可覆盖安装/应用内更新
+            storeFile file("${rootProject.projectDir}/ci/debug.keystore.p12")
+            storeType "PKCS12"
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
         release {
             if (hasReleaseSigning) {
                 storeFile file(localProps['storeFile'])
