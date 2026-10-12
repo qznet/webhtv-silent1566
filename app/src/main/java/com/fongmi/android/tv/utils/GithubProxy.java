@@ -169,6 +169,7 @@ public final class GithubProxy {
         String lower = url.toLowerCase(Locale.ROOT);
         return lower.startsWith("https://raw.githubusercontent.com/")
                 || lower.startsWith("https://gist.githubusercontent.com/")
+                || lower.startsWith("https://api.github.com/")
                 || lower.matches("https://github\\.com/[^/]+/[^/]+/releases/(latest/)?download/.+");
     }
 
