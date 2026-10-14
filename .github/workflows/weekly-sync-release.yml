@@ -430,6 +430,9 @@ jobs:
           # 导致 app 永远找不到清单、检测不到更新。这里为每个 APK 同时生成 stable 与
           # beta 两份清单（app 端两种 channel 都会查），apk 字段指向真实 APK 文件。
           BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          # APK 下载镜像前缀：app 端对“非 github.com 域名”的 apk 地址不再叠加内置代理、
+          # 直接走镜像下载，国内可大幅提速（默认 ghfast.top，可改 APK_MIRROR 环境变量覆盖）。
+          MIRROR="${APK_MIRROR:-https://ghfast.top}"
 
           for combo in leanback-arm64_v8a leanback-armeabi_v7a mobile-arm64_v8a mobile-armeabi_v7a; do
             apk_name="app-${combo}-debug"          # 真实 APK 文件名（Gradle debug 默认带 app- 前缀 + -debug）
@@ -439,7 +442,7 @@ jobs:
             sha256=$(sha256sum "$apk" | cut -d' ' -f1)
             for channel in "" "-beta"; do
               python3 scripts/gen_update_manifest.py \
-                "${combo}${channel}" "$apk_name" "$TAG" "$VERSION_NAME" "$VERSION_CODE" "$SHORT_SHA" "$size" "$sha256" "$BASE_URL"
+                "${combo}${channel}" "$apk_name" "$TAG" "$VERSION_NAME" "$VERSION_CODE" "$SHORT_SHA" "$size" "$sha256" "$BASE_URL" "$MIRROR"
             done
           done
           ls -lh dist/*.json 2>/dev/null || echo "no manifests generated"
