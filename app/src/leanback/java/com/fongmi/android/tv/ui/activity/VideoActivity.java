@@ -260,6 +260,8 @@ import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
+import android.os.Handler;
+import android.os.Looper;
 
 public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.Listener, TrackDialog.Listener, ArrayAdapter.OnClickListener, FlagAdapter.OnClickListener, EpisodeAdapter.OnClickListener, QualityAdapter.OnClickListener, QuickAdapter.OnClickListener, ParseAdapter.OnClickListener, Clock.Callback, SubtitlePlaybackSession.Host, com.fongmi.android.tv.ui.host.TmdbDetailHost, ControlDialog.Listener, CastDialog.Listener, com.fongmi.android.tv.ui.novel.NovelReaderHost {
     /**
@@ -408,6 +410,8 @@ private boolean runtimeSourceOnly;
     private static final long TV_TOUCH_SEEK_SCALE = 50L;
 
     private CustomKeyDownVod mKeyDown;
+    private final Handler mSpeedHandler = new Handler(Looper.getMainLooper());
+    private final Runnable mSpeedHide = () -> { if (mBinding != null) mBinding.widget.speedText.setVisibility(View.GONE); };
     private AudioManager mTvAudioManager;
     private int mTvTouchAxis;
     private boolean mTvTouchMulti;
@@ -8368,8 +8372,16 @@ private boolean runtimeSourceOnly;
         speed = Math.min(5.0f, Math.max(0.25f, speed));
         CharSequence text = player().setSpeed(speed);
         mBinding.control.action.speed.setText(text);
-        Notify.show(String.valueOf(text));
+        showSpeedHint(text);
         if (mHistory != null) mHistory.setUserSpeed(player().getSpeed());
+    }
+
+    /** 全屏短按上下键调速时，在画面顶部短暂显示倍速倍数（无背景、半透明），不遮挡字幕。 */
+    private void showSpeedHint(CharSequence text) {
+        mBinding.widget.speedText.setText(text);
+        mBinding.widget.speedText.setVisibility(View.VISIBLE);
+        mSpeedHandler.removeCallbacks(mSpeedHide);
+        mSpeedHandler.postDelayed(mSpeedHide, 1000);
     }
 
     @Override

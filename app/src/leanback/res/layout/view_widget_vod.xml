@@ -196,4 +196,20 @@
 
     </androidx.appcompat.widget.LinearLayoutCompat>
 
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/speedText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center"
+        android:layout_marginTop="24dp"
+        android:background="@null"
+        android:shadowColor="#000000"
+        android:shadowDx="0"
+        android:shadowDy="0"
+        android:shadowRadius="4"
+        android:textColor="#80FFFFFF"
+        android:textSize="24sp"
+        android:visibility="gone"
+        tools:text="1.5x" />
+
 </FrameLayout>
