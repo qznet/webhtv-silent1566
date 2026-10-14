@@ -425,23 +425,36 @@ jobs:
           VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
           VERSION_CODE="${{ steps.build.outputs.vcode }}"
           SHORT_SHA="$(git rev-parse --short=7 HEAD)"
-          # leanback arm64 是 TV 主力包，作为默认 apk 目标
-          APK_BASE="app-leanback-arm64_v8a-debug"
+          # 关键：manifest 文件名必须与 app 内 Updater.getManifestName 完全一致，
+          # 即 {mode}-{abi}[-beta].json（无 "app-" 前缀）。此前误用 "app-{mode}-{abi}.json"，
+          # 导致 app 永远找不到清单、检测不到更新。这里为每个 APK 同时生成 stable 与
+          # beta 两份清单（app 端两种 channel 都会查），apk 字段指向真实 APK 文件。
           BASE_URL="https://github.com/$REPO/releases/download/$TAG"
 
-          for name in app-leanback-arm64_v8a app-leanback-armeabi_v7a app-mobile-arm64_v8a app-mobile-armeabi_v7a; do
-            apk="dist/${name}-debug.apk"
+          for combo in leanback-arm64_v8a leanback-armeabi_v7a mobile-arm64_v8a mobile-armeabi_v7a; do
+            apk_name="app-${combo}-debug"          # 真实 APK 文件名（Gradle debug 默认带 app- 前缀 + -debug）
+            apk="dist/${apk_name}.apk"
             [ -f "$apk" ] || continue
             size=$(wc -c < "$apk" | tr -d ' ')
             sha256=$(sha256sum "$apk" | cut -d' ' -f1)
-            python3 scripts/gen_update_manifest.py \
-              "$name" "$TAG" "$VERSION_NAME" "$VERSION_CODE" "$SHORT_SHA" "$size" "$sha256" "$BASE_URL"
+            for channel in "" "-beta"; do
+              python3 scripts/gen_update_manifest.py \
+                "${combo}${channel}" "$apk_name" "$TAG" "$VERSION_NAME" "$VERSION_CODE" "$SHORT_SHA" "$size" "$sha256" "$BASE_URL"
+            done
           done
           ls -lh dist/*.json 2>/dev/null || echo "no manifests generated"
 
           if gh release view "$CHANNEL_TAG" -R "$REPO" >/dev/null 2>&1; then
             gh release upload "$CHANNEL_TAG" -R "$REPO" dist/*.json --clobber
             echo "update-channel manifests updated"
+            # 清理历史错误命名的清单（旧版误用 "app-" 前缀），避免污染
+            gh api "repos/$REPO/releases/tags/$CHANNEL_TAG" --jq '.assets[] | select(.name | startswith("app-")) | "\(.id)\t\(.name)"' \
+              > /tmp/stale-manifests.tsv || true
+            while IFS=$'\t' read -r aid aname; do
+              [ -z "$aid" ] && continue
+              echo "删除陈旧清单：$aname (id=$aid)"
+              gh api -X DELETE "repos/$REPO/releases/assets/$aid" >/dev/null 2>&1 || echo "  删除失败 $aname"
+            done < /tmp/stale-manifests.tsv
           else
             gh release create "$CHANNEL_TAG" -R "$REPO" --target main \
               --title "Update channel manifests" \
