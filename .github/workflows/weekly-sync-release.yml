@@ -253,7 +253,18 @@ jobs:
         env:
           SCOPE: ${{ steps.scope.outputs.scope }}
         run: |
-          VCODE=$(date +%Y%m%d%H)
+          # versionCode 必须单调递增且严格大于已装版本，否则“检查更新”会误判“已是最新版”。
+          # 取线上当前清单的 code 作为基准，保证新构建 versionCode = max(当前时间, 上次 code+1)。
+          PREV_CODE=$(curl -sL --max-time 20 "${APK_MIRROR:-https://ghproxy.net}/https://github.com/${{ github.repository }}/releases/download/update-channel/leanback-armeabi_v7a.json" 2>/dev/null | grep -o '"code"[[:space:]]*:[[:space:]]*[0-9]*' | grep -o '[0-9]*' | head -1)
+          NOW_CODE=$(date +%Y%m%d%H)
+          VCODE=$NOW_CODE
+          if [ -n "$PREV_CODE" ] && [ "$VCODE" -le "$PREV_CODE" ]; then
+            VCODE=$((PREV_CODE + 1))
+          fi
+          # 一次性恢复：当前有设备已装版本 anomalously 高于线上(2026101422)，强制越过避免仍卡“已是最新”
+          if [ -n "$PREV_CODE" ] && [ "$VCODE" -le 2026101422 ]; then
+            VCODE=2026101423
+          fi
           echo "vcode=$VCODE" >> "$GITHUB_OUTPUT"
           echo ">> 注入 versionCode=$VCODE (覆盖默认 560，确保 app 内可检测新版本)"
           if [ "$SCOPE" = "beta" ]; then
@@ -441,9 +452,13 @@ jobs:
             [ -f "$apk" ] || continue
             size=$(wc -c < "$apk" | tr -d ' ')
             sha256=$(sha256sum "$apk" | cut -d' ' -f1)
+            # 直接从构建产物 APK 读取真实 versionCode，杜绝与 gradle 注入值漂移
+            # （此前因跨小时漂移导致 manifest.code < 实装版本 → 误判“已是最新版”）
+            APK_VC=$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk" 2>/dev/null | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" | head -1)
+            VC="${APK_VC:-$VERSION_CODE}"
             for channel in "" "-beta"; do
               python3 scripts/gen_update_manifest.py \
-                "${combo}${channel}" "$apk_name" "$TAG" "$VERSION_NAME" "$VERSION_CODE" "$SHORT_SHA" "$size" "$sha256" "$BASE_URL" "$MIRROR"
+                "${combo}${channel}" "$apk_name" "$TAG" "$VERSION_NAME" "$VC" "$SHORT_SHA" "$size" "$sha256" "$BASE_URL" "$MIRROR"
             done
           done
           ls -lh dist/*.json 2>/dev/null || echo "no manifests generated"
