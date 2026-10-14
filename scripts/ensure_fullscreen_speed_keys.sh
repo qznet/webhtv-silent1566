@@ -174,7 +174,7 @@ else:
         speed = Math.min(5.0f, Math.max(0.25f, speed));
         CharSequence text = player().setSpeed(speed);
         mBinding.control.action.speed.setText(text);
-        Notify.show(String.valueOf(text));
+        showSpeedHint(text);
         if (mHistory != null) mHistory.setUserSpeed(player().getSpeed());
     }
 
@@ -225,6 +225,98 @@ else:
 PY
 fi
 
+# ---- 4c. 重新应用：调速提示去背景半透明覆盖层（view_widget_vod.xml 的 speedText）----
+WIDGET="app/src/leanback/res/layout/view_widget_vod.xml"
+if [ -f "$WIDGET" ]; then
+python3 - "$WIDGET" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+if 'android:id="@+id/speedText"' not in s:
+    block = """    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/speedText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center"
+        android:layout_marginTop="24dp"
+        android:background="@null"
+        android:shadowColor="#000000"
+        android:shadowDx="0"
+        android:shadowDy="0"
+        android:shadowRadius="4"
+        android:textColor="#80FFFFFF"
+        android:textSize="24sp"
+        android:visibility="gone"
+        tools:text="1.5x" />
+
+"""
+    if "</FrameLayout>" in s:
+        s = s.replace("</FrameLayout>", block + "</FrameLayout>", 1)
+        open(p, "w", encoding="utf-8").write(s)
+        print("  view_widget_vod.xml: speedText 覆盖层已重新插入")
+    else:
+        print("  ERROR: view_widget_vod.xml 找不到 </FrameLayout>")
+        sys.exit(3)
+else:
+    print("  OK view_widget_vod.xml 含 speedText 覆盖层")
+PY
+fi
+
+# ---- 4d. 重新应用：showSpeedHint 方法 + 字段 + import + stepSpeed 调用 ----
+python3 - "$VA" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+orig = s
+
+# 4d-1. imports（Handler / Looper）
+for imp in ("import android.os.Handler;", "import android.os.Looper;"):
+    if imp not in s:
+        m = re.search(r'^(import android\.os\.\w+;)\n', s, re.M)
+        if m:
+            s = s[:m.end()] + imp + "\n" + s[m.end():]
+        else:
+            s = imp + "\n" + s
+        print("  patched: import " + imp)
+
+# 4d-2. 字段（mSpeedHandler / mSpeedHide）
+if "private final Handler mSpeedHandler" not in s:
+    s = s.replace(
+        "    private CustomKeyDownVod mKeyDown;",
+        "    private CustomKeyDownVod mKeyDown;\n    private final Handler mSpeedHandler = new Handler(Looper.getMainLooper());\n    private final Runnable mSpeedHide = () -> { if (mBinding != null) mBinding.widget.speedText.setVisibility(View.GONE); };",
+        1)
+    print("  patched: mSpeedHandler/mSpeedHide 字段")
+
+# 4d-3. showSpeedHint 方法（插到 stepSpeed 之前）
+if "private void showSpeedHint" not in s:
+    anchor = "    /** 全屏播放中短按上下键调节倍速（±0.1），暂停时不生效。 */"
+    block = """    /** 全屏短按上下键调速时，在画面顶部短暂显示倍速倍数（无背景、半透明），不遮挡字幕。 */
+    private void showSpeedHint(CharSequence text) {
+        mBinding.widget.speedText.setText(text);
+        mBinding.widget.speedText.setVisibility(View.VISIBLE);
+        mSpeedHandler.removeCallbacks(mSpeedHide);
+        mSpeedHandler.postDelayed(mSpeedHide, 1000);
+    }
+
+"""
+    if anchor in s:
+        s = s.replace(anchor, block + anchor, 1)
+        print("  patched: showSpeedHint 方法")
+    else:
+        print("  WARN: 找不到 stepSpeed 注释锚点，showSpeedHint 未插入（请人工检查）")
+
+# 4d-4. stepSpeed 必须用 showSpeedHint 而非 Notify.show
+if "Notify.show(String.valueOf(text));" in s:
+    s = s.replace("        Notify.show(String.valueOf(text));", "        showSpeedHint(text);", 1)
+    print("  patched: stepSpeed 改用 showSpeedHint")
+
+if s != orig:
+    open(p, "w", encoding="utf-8").write(s)
+    print("  VideoActivity: 调速提示定制已修复")
+else:
+    print("  OK VideoActivity 调速提示定制完好")
+PY
+
 # ---- 5. 复检 ----
 echo "复检..."
 rc=0
@@ -241,5 +333,9 @@ if [ -f "$CA" ]; then
     if ! grep -q "$pat" "$CA"; then echo "::error title=补丁复检失败::CastActivity 仍缺 $pat（Listener 实现不完整）"; rc=1; fi
   done
 fi
+# 调速提示去背景半透明覆盖层
+if ! grep -q 'android:id="@+id/speedText"' "app/src/leanback/res/layout/view_widget_vod.xml"; then echo "::error title=补丁复检失败::view_widget_vod.xml 缺 speedText 覆盖层"; rc=1; fi
+if ! grep -q "private void showSpeedHint" "$VA"; then echo "::error title=补丁复检失败::VideoActivity 缺 showSpeedHint 方法"; rc=1; fi
+if grep -q "Notify.show(String.valueOf(text));" "$VA"; then echo "::error title=补丁复检失败::stepSpeed 仍用 Notify.show（应改 showSpeedHint）"; rc=1; fi
 [ "$rc" -eq 0 ] && echo "全屏调速定制已修复并复检通过。"
 exit $rc
