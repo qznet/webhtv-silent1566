@@ -9,14 +9,13 @@ import java.net.URI;
 
 public final class GithubProxy {
 
-    public static final String DEFAULT = "https://ghproxy.net/";
+    public static final String DEFAULT = "https://gh-proxy.com/";
     public static final String DIRECT = "direct";
     public static final String MODE_FULL_URL = "full_url";
     public static final String MODE_STRIP_SCHEME = "strip_scheme";
 
     private static final String[] BUILT_IN = {
-            "https://ghproxy.net/",
-            "https://gh-proxy.com/",
+            DEFAULT,
             "https://ghfast.top/",
             "https://99z.top/",
             "https://proxy.v2gh.com/",
@@ -139,7 +138,6 @@ public final class GithubProxy {
         public String rewrite(String url) {
             String target = requireHttpsUrl(url);
             if (DIRECT.equals(id) || baseUrl.isEmpty()) return target;
-            if (isProxied(url)) return target;   // 已含镜像/代理前缀（如 https://mirror/https://github.com/...），勿二次套代理，否则外层代理返回 403
             String prefix = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
             if (MODE_STRIP_SCHEME.equals(mode)) return prefix + target.substring("https://".length());
             return prefix + target;
@@ -171,7 +169,6 @@ public final class GithubProxy {
         String lower = url.toLowerCase(Locale.ROOT);
         return lower.startsWith("https://raw.githubusercontent.com/")
                 || lower.startsWith("https://gist.githubusercontent.com/")
-                || lower.startsWith("https://api.github.com/")
                 || lower.matches("https://github\\.com/[^/]+/[^/]+/releases/(latest/)?download/.+");
     }
 
