@@ -253,9 +253,9 @@ jobs:
         env:
           SCOPE: ${{ steps.scope.outputs.scope }}
         run: |
-          # versionCode 必须单调递增且严格大于已装版本，否则“检查更新”会误判“已是最新版”。
-          # 取线上当前清单的 code 作为基准，保证新构建 versionCode = max(当前时间, 上次 code+1)。
-          PREV_CODE=$(curl -sL --max-time 20 "${APK_MIRROR:-https://ghproxy.net}/https://github.com/${{ github.repository }}/releases/download/update-channel/leanback-armeabi_v7a.json" 2>/dev/null | grep -o '"code"[[:space:]]*:[[:space:]]*[0-9]*' | grep -o '[0-9]*' | head -1)
+          # versionCode 单调递增：取线上当前清单的 code 作为基准，保证新构建 versionCode = max(当前时间, 上次 code+1)。
+          # （回退到上游 hasUpdate=code!=VERSION_CODE 后，轻微漂移不会再误判“已是最新版”，此处仅作版本卫生。）
+          PREV_CODE=$(curl -sL --max-time 20 "https://github.com/${{ github.repository }}/releases/download/update-channel/leanback-armeabi_v7a.json" 2>/dev/null | grep -o '"code"[[:space:]]*:[[:space:]]*[0-9]*' | grep -o '[0-9]*' | head -1)
           NOW_CODE=$(date +%Y%m%d%H)
           VCODE=$NOW_CODE
           if [ -n "$PREV_CODE" ] && [ "$VCODE" -le "$PREV_CODE" ]; then
@@ -441,10 +441,9 @@ jobs:
           # 导致 app 永远找不到清单、检测不到更新。这里为每个 APK 同时生成 stable 与
           # beta 两份清单（app 端两种 channel 都会查），apk 字段指向真实 APK 文件。
           BASE_URL="https://github.com/$REPO/releases/download/$TAG"
-          # APK 下载镜像前缀：manifest 的 apk 写成“镜像/https://github.com/...”形式，
-          # app 端 GithubProxy.rewrite() 已加 isProxied 守卫，识别为已代理地址后不再二次套代理，
-          # 于是单次经镜像中继下载（默认 ghproxy.net，可改 APK_MIRROR 环境变量覆盖）。
-          MIRROR="${APK_MIRROR:-https://ghproxy.net}"
+          # manifest 的 apk 直接用纯 github.com 地址（与上游原版一致）。
+          # app 端 GithubProxy 默认代理为 gh-proxy.com，会把 github.com 的 apk 重写后经该代理下载，
+          # 国内实测可达 ~10MB/s；不再注入第三方镜像前缀，避免被慢镜像限流。
 
           for combo in leanback-arm64_v8a leanback-armeabi_v7a mobile-arm64_v8a mobile-armeabi_v7a; do
             apk_name="app-${combo}-debug"          # 真实 APK 文件名（Gradle debug 默认带 app- 前缀 + -debug）
@@ -458,7 +457,7 @@ jobs:
             VC="${APK_VC:-$VERSION_CODE}"
             for channel in "" "-beta"; do
               python3 scripts/gen_update_manifest.py \
-                "${combo}${channel}" "$apk_name" "$TAG" "$VERSION_NAME" "$VC" "$SHORT_SHA" "$size" "$sha256" "$BASE_URL" "$MIRROR"
+                "${combo}${channel}" "$apk_name" "$TAG" "$VERSION_NAME" "$VC" "$SHORT_SHA" "$size" "$sha256" "$BASE_URL"
             done
           done
           ls -lh dist/*.json 2>/dev/null || echo "no manifests generated"
