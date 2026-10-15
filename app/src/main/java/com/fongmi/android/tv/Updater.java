@@ -79,7 +79,7 @@ public class Updater implements UpdateTransfer.Callback, UpdateListener {
     private Update beta;
     private Update selected;
     private boolean force;
-    private volatile boolean downloading;
+    private boolean downloading;
     private boolean canceled;
     private int lastProgress = -1;
     private long lastBytes;
@@ -92,11 +92,6 @@ public class Updater implements UpdateTransfer.Callback, UpdateListener {
 
     public static Updater create() {
         return INSTANCE;
-    }
-
-    /** Reports an in-flight APK download so cache cleanup can preserve {@code update.apk}. */
-    public static boolean isDownloading() {
-        return INSTANCE.downloading;
     }
 
     private File getFile() {
@@ -174,14 +169,7 @@ public class Updater implements UpdateTransfer.Callback, UpdateListener {
 
     private Update getUpdate(String channel) {
         String manifestName = getManifestName(channel);
-        // API-first: read the update-channel manifest through the GitHub Releases API. Each release
-        // asset has a unique, immutable URL, so it can never be poisoned by an overwritten fixed-name
-        // file cached on a proxy/CDN (unlike the releases/download path). The API request is proxied
-        // (+cache-bustered) to stay reachable from CN; on failure we fall back to the proxied
-        // update-channel file (also cache-bustered) and finally the CNB mirror.
-        Update update = getGithubChannelUpdate(channel);
-        if (update.hasManifest()) return update;
-        update = readUpdate(channel, Github.getChannelAsset(manifestName), SOURCE_GITHUB);
+        Update update = readUpdate(channel, Github.getChannelAsset(manifestName), SOURCE_GITHUB);
         if (update.hasManifest()) return update;
         if (Update.CHANNEL_BETA.equals(channel)) {
             update = readUpdate(channel, Github.getCnbMirrorAsset(manifestName), SOURCE_CNB);
@@ -193,27 +181,9 @@ public class Updater implements UpdateTransfer.Callback, UpdateListener {
         return getGithubStableUpdate(channel);
     }
 
-    /** Fetch a GitHub API URL through the proxy (+cache-buster) so it stays reachable from CN. */
-    private String fetchGithubApi(String apiUrl) throws Exception {
-        GithubProxy.Config config = GithubProxy.config();
-        String proxiedUrl = config.rewrite(Github.withCacheBuster(apiUrl));
-        return UpdateHttp.string(proxiedUrl, GITHUB_API_HEADERS, GITHUB_REQUEST_TIMEOUT_MS);
-    }
-
-    /** Read the update-channel manifest via the GitHub Releases API (immutable per-asset URL). */
-    private Update getGithubChannelUpdate(String channel) {
-        try {
-            JSONObject release = new JSONObject(fetchGithubApi(Github.getReleaseApi("update-channel")));
-            return readGithubReleaseUpdate(channel, release);
-        } catch (Exception e) {
-            Log.w(TAG, "channel_release_lookup_failed channel=" + channel + " type=" + e.getClass().getSimpleName());
-            return Update.empty(channel);
-        }
-    }
-
     private Update getGithubStableUpdate(String channel) {
         try {
-            JSONObject release = new JSONObject(fetchGithubApi(Github.getLatestReleaseApi()));
+            JSONObject release = new JSONObject(UpdateHttp.string(Github.getLatestReleaseApi(), GITHUB_API_HEADERS, GITHUB_REQUEST_TIMEOUT_MS));
             return readGithubReleaseUpdate(channel, release);
         } catch (Exception e) {
             Log.w(TAG, "release_lookup_failed channel=" + channel + " type=" + e.getClass().getSimpleName());
@@ -224,7 +194,7 @@ public class Updater implements UpdateTransfer.Callback, UpdateListener {
     private Update getGithubBetaUpdate(String channel) {
         String manifestName = getManifestName(channel);
         try {
-            JSONArray releases = new JSONArray(fetchGithubApi(Github.getReleasesApi()));
+            JSONArray releases = new JSONArray(UpdateHttp.string(Github.getReleasesApi(), GITHUB_API_HEADERS, GITHUB_REQUEST_TIMEOUT_MS));
             for (int i = 0; i < releases.length(); i++) {
                 JSONObject release = releases.optJSONObject(i);
                 if (release == null || !isBetaRelease(release)) continue;
@@ -271,8 +241,7 @@ public class Updater implements UpdateTransfer.Callback, UpdateListener {
         Update update = Update.empty(channel);
         try {
             GithubProxy.Config config = GithubProxy.config();
-            String bustedUrl = Github.withCacheBuster(manifestUrl);
-            String proxiedUrl = config.rewrite(bustedUrl);
+            String proxiedUrl = config.rewrite(manifestUrl);
             String text = UpdateHttp.string(proxiedUrl, headers, GITHUB_REQUEST_TIMEOUT_MS);
             if (TextUtils.isEmpty(text)) throw new IllegalStateException("Empty update manifest: " + manifestUrl);
             JSONObject object = new JSONObject(text);
