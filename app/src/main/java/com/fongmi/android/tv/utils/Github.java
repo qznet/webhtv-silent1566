@@ -5,7 +5,6 @@ public class Github {
     private static final String GITHUB_LATEST = "https://github.com/qznet/webhtv-silent1566/releases/latest/download";
     private static final String GITHUB_RELEASE = "https://github.com/qznet/webhtv-silent1566/releases/download";
     private static final String GITHUB_UPDATE_CHANNEL = GITHUB_RELEASE + "/update-channel";
-    // 镜像源统一指向本项目的 update-channel，避免 app 内更新拿到上游/第三方的非本项目构建包
     private static final String CNB_MANIFEST = GITHUB_UPDATE_CHANNEL;
     private static final String GITHUB_API = "https://api.github.com/repos/qznet/webhtv-silent1566/releases/tags";
     private static final String GITHUB_RELEASES_API = "https://api.github.com/repos/qznet/webhtv-silent1566/releases";
@@ -67,12 +66,5 @@ public class Github {
 
     public static String getReleaseAssetApi(long id) {
         return GITHUB_RELEASE_ASSETS_API + "/" + id;
-    }
-
-    /** Append a cache-buster query param so GitHub proxies/CDNs don't serve a stale cached manifest. */
-    public static String withCacheBuster(String url) {
-        if (url == null || url.isEmpty()) return url;
-        long t = System.currentTimeMillis();
-        return url + (url.contains("?") ? "&" : "?") + "_t=" + t;
     }
 }
