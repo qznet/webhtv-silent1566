@@ -123,18 +123,23 @@ jobs:
         id: meta
         run: |
           VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
-          # versionCode 可能写成两种形态：
-          #   1) 纯数字：            versionCode 560
-          #   2) 带 -Pvcode 的三元：   versionCode project.hasProperty('vcode') ? vcode.toInteger() : 560
-          # 先取三元表达式的回退值（最后一个 ':' 后的数字），取不到再退回纯数字形态。
-          VERSION_CODE="$(sed -n 's/^[[:space:]]*versionCode[^:]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' app/build.gradle | head -1)"
-          if [ -z "$VERSION_CODE" ]; then
-            VERSION_CODE="$(sed -n 's/^[[:space:]]*versionCode[[:space:]]*\([0-9][0-9]*\).*/\1/p' app/build.gradle | head -1)"
+          # versionCode 单调递增：app/build.gradle 里是
+          #   versionCode project.hasProperty('vcode') ? vcode.toInteger() : 560
+          # 即默认 560，靠 -Pvcode 注入真实版本号。若不注入，APK 版本号会是 560，
+          # 而设备上已装的 weekly 产物是时间戳量级(2026101423+) → 系统判定"降级安装"而拒绝。
+          # 基准取线上通道清单的 code，保证单调递增（与 weekly-sync-release.yml 同策略）。
+          PREV_CODE=$(curl -sL --max-time 20 "https://github.com/${{ github.repository }}/releases/download/update-channel/leanback-armeabi_v7a.json" 2>/dev/null | grep -o '"code"[[:space:]]*:[[:space:]]*[0-9]*' | grep -o '[0-9]*' | head -1)
+          NOW_CODE=$(date +%Y%m%d%H)
+          VCODE=$NOW_CODE
+          if [ -n "$PREV_CODE" ] && [ "$VCODE" -le "$PREV_CODE" ]; then
+            VCODE=$((PREV_CODE + 1))
           fi
-          if [ -z "$VERSION_CODE" ]; then
-            echo "::error title=Cannot resolve versionCode::Failed to parse versionCode from app/build.gradle"
-            exit 1
+          # 已装设备版本可能高于线上清单（清单被覆盖时），至少越过该基线避免降级安装
+          if [ "$VCODE" -le 2026101422 ]; then
+            VCODE=2026101423
           fi
+          echo "vcode=$VCODE" >> "$GITHUB_OUTPUT"
+          echo ">> 注入 versionCode=$VCODE (prev=$PREV_CODE，覆盖默认 560，避免降级安装)"
           CHANNEL="${{ inputs.release_channel }}"
           if [ "$CHANNEL" = "auto" ] || [ -z "$CHANNEL" ]; then
             if [ "${{ github.ref_name }}" = "dev" ] || [ "${{ github.ref_name }}" = "fongmi-sync" ]; then
@@ -175,7 +180,7 @@ jobs:
             echo "tag=$TAG"
             echo "title=${TAG#v}"
             echo "version_name=$VERSION_NAME"
-            echo "version_code=$VERSION_CODE"
+            echo "version_code=$VCODE"
             echo "short_sha=$(git rev-parse --short=7 HEAD)"
             echo "channel=$CHANNEL"
             echo "apk_suffix=$APK_SUFFIX"
@@ -222,19 +227,31 @@ jobs:
           } > local.properties
           echo "Release signing configured"
 
-      - name: Build four release APKs
+      - name: Build release APKs
         env:
           WEBHTV_RELEASE_TAG: ${{ steps.meta.outputs.tag }}
           WEBHTV_APK_SUFFIX: ${{ steps.meta.outputs.apk_suffix }}
+          RELEASE_CHANNEL: ${{ steps.meta.outputs.channel }}
         run: |
           chmod +x ./gradlew
           rm -rf Release/apk
-          ./gradlew \
-            :app:assembleMobileArm64_v8aRelease \
-            :app:assembleMobileArmeabi_v7aRelease \
-            :app:assembleLeanbackArm64_v8aRelease \
-            :app:assembleLeanbackArmeabi_v7aRelease \
-            --no-daemon
+          # beta 版只出电视 v7a 一个包；正式版(stable)出全量四包。
+          if [ "$RELEASE_CHANNEL" = "beta" ]; then
+            echo ">> beta 通道：仅构建 leanback armeabi-v7a"
+            ./gradlew \
+              :app:assembleLeanbackArmeabi_v7aRelease \
+              -Pvcode=${{ steps.meta.outputs.vcode }} \
+              --no-daemon
+          else
+            echo ">> stable 通道：构建全量四包"
+            ./gradlew \
+              :app:assembleMobileArm64_v8aRelease \
+              :app:assembleMobileArmeabi_v7aRelease \
+              :app:assembleLeanbackArm64_v8aRelease \
+              :app:assembleLeanbackArmeabi_v7aRelease \
+              -Pvcode=${{ steps.meta.outputs.vcode }} \
+              --no-daemon
+          fi
 
       - name: Collect artifacts
         run: |
