@@ -35,6 +35,11 @@ on:
         required: false
         default: true
         type: boolean
+      skip_release_signing:
+        description: "Build with the repo's fixed debug keystore when release secrets are absent (for compile verification / sideload)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -167,6 +172,7 @@ jobs:
 
       - name: Configure release signing
         env:
+          SKIP_RELEASE_SIGNING: ${{ inputs.skip_release_signing }}
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
@@ -180,7 +186,19 @@ jobs:
           ALIAS="${RELEASE_KEY_ALIAS:-$KEY_ALIAS}"
           KEY_PASS="${RELEASE_KEY_PASSWORD:-$STORE_PASSWORD}"
           if [ -z "$KS_BASE64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$ALIAS" ]; then
-            echo "::error title=Release signing not configured::Configure RELEASE_KEYSTORE_BASE64, RELEASE_KEY_ALIAS and RELEASE_STORE_PASSWORD in repository secrets."
+            if [ "$SKIP_RELEASE_SIGNING" = "true" ]; then
+              echo "::notice title=Release signing not configured::Falling back to the repo's fixed debug keystore (ci/debug.keystore.p12). Artifact is for compile verification / sideload only."
+              #留空 local.properties 中的 storeFile/口令，build.gradle 会按 hasReleaseSigning=false 回退到 signingConfigs.debug
+              {
+                echo "storeFile="
+                echo "keyAlias="
+                echo "storePassword="
+                echo "keyPassword="
+              } > local.properties
+              echo "Debug signing fallback configured"
+              exit 0
+            fi
+            echo "::error title=Release signing not configured::Configure RELEASE_KEYSTORE_BASE64, RELEASE_KEY_ALIAS and RELEASE_STORE_PASSWORD in repository secrets, or re-run with skip_release_signing=true."
             exit 1
           fi
           mkdir -p app/signing
