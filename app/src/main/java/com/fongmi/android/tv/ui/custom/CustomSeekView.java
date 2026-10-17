@@ -62,27 +62,6 @@ public class CustomSeekView extends FrameLayout implements Player.Listener, Time
     private long pendingSeekOrigin = C.TIME_UNSET;
     private long pendingSeekDeadlineMs;
 
-    private static final String DBG = "SeekDiag";
-    private int dbgN;
-
-    private void diag(String fmt, Object... args) {
-        if ((dbgN++ % 5) != 0) return;
-        StringBuilder sb = new StringBuilder();
-        sb.append("attached=").append(attached)
-                .append(" progPlayer=").append(progressPlayer == null ? "null" : progressPlayer.getClass().getSimpleName())
-                .append(" ctlPlayer=").append(player == null ? "null" : player.getClass().getSimpleName())
-                .append(" same=").append(progressPlayer != null && progressPlayer == player)
-                .append(" vis=").append(getVisibility())
-                .append(" isShown=").append(isShown())
-                .append(" curDur=").append(currentDuration)
-                .append(" curPos=").append(currentPosition);
-        Player p = getProgressPlayer();
-        sb.append(" realDur=").append(p == null ? -1 : p.getDuration())
-                .append(" realPos=").append(p == null ? -1 : p.getCurrentPosition())
-                .append(" playing=").append(p != null && p.isPlaying());
-        Log.d(DBG, sb.toString());
-    }
-
     public CustomSeekView(Context context) {
         this(context, null);
     }
@@ -147,7 +126,6 @@ public class CustomSeekView extends FrameLayout implements Player.Listener, Time
 
     private void updateTimeline() {
         Player progress = getProgressPlayer();
-        Log.d(DBG, "updateTimeline attached=" + attached + " prog=" + (progress == null ? "null" : progress.getClass().getSimpleName()) + " dur=" + (progress == null ? -1 : progress.getDuration()));
         if (!attached || progress == null) return;
         long duration = progress.getDuration();
         if (duration < 0) duration = 0;
@@ -161,10 +139,7 @@ public class CustomSeekView extends FrameLayout implements Player.Listener, Time
     private void updateProgress() {
         removeCallbacks(runnable);
         Player progress = getProgressPlayer();
-        if (!attached || progress == null) {
-            Log.d(DBG, "updateProgress EARLY-RETURN attached=" + attached + " prog=" + (progress == null ? "null" : progress.getClass().getSimpleName()));
-            return;
-        }
+        if (!attached || progress == null) return;
         long reportedPosition = Math.max(0, progress.getCurrentPosition());
         long position = stableSeekPosition(reportedPosition);
         long buffered = effectiveBufferedPosition(progress);
@@ -188,7 +163,6 @@ public class CustomSeekView extends FrameLayout implements Player.Listener, Time
             timeBar.setBufferedPosition(buffered);
         }
         logPausedBufferProgress(progress, position, buffered);
-        diag("updateProgress-tick");
         if (progress.isPlaying()) {
             postDelayed(runnable, delayMs(progress, position));
         } else {
@@ -235,7 +209,6 @@ public class CustomSeekView extends FrameLayout implements Player.Listener, Time
     }
 
     private void resetView() {
-        Log.d(DBG, "resetView ★把两端设成 00:00, item=");
         clearPendingSeek();
         positionView.setText("00:00");
         durationView.setText("00:00");
@@ -339,14 +312,13 @@ public class CustomSeekView extends FrameLayout implements Player.Listener, Time
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         attached = true;
-        Log.d(DBG, "onAttachedToWindow attached=true");
         // Sync focus navigation from parent to timeBar
         int nextFocusUpId = getNextFocusUpId();
         int nextFocusDownId = getNextFocusDownId();
         Log.d(TAG, "onAttachedToWindow - nextFocusUpId: " + nextFocusUpId + ", nextFocusDownId: " + nextFocusDownId);
         if (nextFocusUpId != NO_ID) {
             timeBar.setNextFocusUpId(nextFocusUpId);
-            Log.d(TAG, "Set timeBar nextFocusUpId to: " + nextFocusUpId + "  ★可能覆盖上游 syncSeekReturnTarget 的设定");
+            Log.d(TAG, "Set timeBar nextFocusUpId to: " + nextFocusUpId);
         }
         if (nextFocusDownId != NO_ID) {
             timeBar.setNextFocusDownId(nextFocusDownId);
@@ -367,7 +339,6 @@ public class CustomSeekView extends FrameLayout implements Player.Listener, Time
 
     @Override
     protected void onDetachedFromWindow() {
-        Log.d(DBG, "onDetachedFromWindow ★attached 即将置 false，调度循环中断");
         attached = false;
         removeCallbacks(runnable);
         super.onDetachedFromWindow();
