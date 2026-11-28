@@ -76,7 +76,8 @@ public class GithubProxyTest {
 
     @Test
     public void probeUrlUsesNormalizedSourceAndFixedTarget() {
-        assertEquals("https://ghfast.top/https://github.com/Silent1566/webhtv/releases/download/update-channel/update.json",
+        // fork 定制：探测目标复用 Github.getChannelAsset，指向本项目仓库更新通道。
+        assertEquals("https://ghfast.top/https://github.com/qznet/webhtv-silent1566/releases/download/update-channel/update.json",
                 GithubProxy.probeUrl("https://ghfast.top"));
     }
 

@@ -72,7 +72,9 @@ public class UpdateChannelTest {
     @Test
     public void releaseWorkflowCanRepairAnExistingReleaseOnRetry() throws Exception {
         String workflow = read(findRepoPath().resolve(Path.of(".github", "workflows", "android-release.yml")));
-        String resolveStep = between(workflow, "- name: Resolve release tag", "\n  test:");
+        // fork 定制：保留稳定的单 job 结构（beta 只出 v7a 依赖它），上游重构后
+        // 新增了独立的 test job。结束标记同时兼容两种结构，避免 between() 越界。
+        String resolveStep = betweenFlexible(workflow, "- name: Resolve release tag", "\n  test:", "\n      - name: Configure release signing");
         String releaseStep = between(workflow, "- name: Create GitHub Release", "- name: Publish update channel manifests");
 
         assertFalse("An existing tag at the same commit should be reusable",
@@ -83,16 +85,30 @@ public class UpdateChannelTest {
                 resolveStep.contains("$(date +%Y%m%d%H%M)"));
         assertTrue("A retry must reject an existing tag that targets another commit",
                 resolveStep.contains("Existing release tag targets another commit"));
+        // fork 单 job 结构用 steps.meta，上游多 job 结构用 needs.meta，两者都接受。
         assertTrue("A retry must detect an already-created GitHub Release",
-                releaseStep.contains("if gh release view \"${{ needs.meta.outputs.tag }}\""));
+                releaseStep.contains("if gh release view \"${{ needs.meta.outputs.tag }}\"")
+                        || releaseStep.contains("if gh release view \"${{ steps.meta.outputs.tag }}\""));
         assertTrue("A retry must repair partially uploaded release assets",
-                releaseStep.contains("gh release upload \"${{ needs.meta.outputs.tag }}\" dist/*.apk dist/*.json --clobber"));
+                releaseStep.contains("gh release upload \"${{ needs.meta.outputs.tag }}\" dist/*.apk dist/*.json --clobber")
+                        || releaseStep.contains("gh release upload \"${{ steps.meta.outputs.tag }}\" dist/*.apk dist/*.json --clobber"));
     }
 
     private static String between(String source, String start, String end) {
         int from = source.indexOf(start);
         int to = source.indexOf(end, from + start.length());
         return source.substring(from, to);
+    }
+
+    /** 按候选结束标记依次尝试，兼容 fork 单 job 与上游多 job 两种 workflow 结构。 */
+    private static String betweenFlexible(String source, String start, String... ends) {
+        int from = source.indexOf(start);
+        if (from < 0) return "";
+        for (String end : ends) {
+            int to = source.indexOf(end, from + start.length());
+            if (to > from) return source.substring(from, to);
+        }
+        return source.substring(from);
     }
 
     private static String read(Path path) throws Exception {
