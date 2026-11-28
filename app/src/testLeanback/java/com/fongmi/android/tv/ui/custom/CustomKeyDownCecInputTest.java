@@ -346,6 +346,10 @@ public class CustomKeyDownCecInputTest {
         @Override public void onSeekCancel() { cancels++; }
         @Override public void onSpeedUp() { speedUps++; }
         @Override public void onSpeedEnd() { speedEnds++; }
+        // fork 全屏调速定制新增的 Listener 方法（上游测试桩未覆盖）
+        @Override public void onSpeedStepUp() { }
+        @Override public void onSpeedStepDown() { }
+        @Override public void onShowControl() { }
         @Override public void onKeyUp() { ups++; }
         @Override public void onKeyDown() { }
         @Override public void onKeyCenter() { }

@@ -287,6 +287,10 @@ public class CustomKeyDownSeekOwnershipTest {
         @Override public void onSeekEnd(long time) { seeks.add(time); input.reset(); }
         @Override public void onSpeedUp() { speedUps++; }
         @Override public void onSpeedEnd() { speedEnds++; }
+        // fork 全屏调速定制新增的 Listener 方法（上游测试桩未覆盖）
+        @Override public void onSpeedStepUp() { }
+        @Override public void onSpeedStepDown() { }
+        @Override public void onShowControl() { }
         @Override public void onKeyUp() { }
         @Override public void onKeyDown() { downs++; }
         @Override public void onKeyCenter() { }
